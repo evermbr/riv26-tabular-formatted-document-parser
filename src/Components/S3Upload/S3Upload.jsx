@@ -163,6 +163,11 @@ class S3Upload extends Component {
         e.preventDefault();
         const {initiateProcessing, addProcessingStatus, updateProcessingStatus} = this.props;
         const {pageOption} = this.state;
+        const visibility = 'protected';
+        const selectedFile = document.getElementById("fileUpload").files;
+        if (!selectedFile.length) {
+            return alert("Please choose a file to upload first!");
+        }
         initiateProcessing();
         const confidence = parseInt(document.getElementById("confidence").value);
         let pages = [];
@@ -170,22 +175,21 @@ class S3Upload extends Component {
             let pageInput = document.getElementById("pages").value.split(",");
             pages = this.formatPages(pageInput);
         }
-        const visibility = 'protected';
-        const selectedFile = document.getElementById("fileUpload").files;
-        if (!selectedFile.length) {
-            return alert("Please choose a file to upload first!");
-        }
         this.setState({
             isProcessing: true,
-            state: "Uploading",
+            status: "Uploading",
         })
         const file = selectedFile[0];
         const fileName = file.name;
         let info;
-        const [, , , extension] = /([^.]+)(\.(\w+))?$/.exec(fileName);
-        const mimeType = fileName.slice(fileName.indexOf('.')+1);
+        // The extension is the text after the LAST dot, lower-cased, because the
+        // processor only recognises "pdf", "jpg", "jpeg" and "png". Splitting on
+        // the first dot broke names like "a.b.pdf", and upper-case extensions
+        // ("X.PDF") were never matched.
+        const extension = fileName.slice(fileName.lastIndexOf('.') + 1).toLowerCase();
+        const mimeType = extension;
         const keyName = uuid().concat("_").concat(fileName.replace(/\.[^/.]+$/, "")).concat("-" + mimeType);
-        const key = `${keyName}${extension && '.'}${extension}`;
+        const key = `${keyName}.${extension}`;
         addProcessingStatus({id: key, status: "Uploading", expirationTime: Math.floor(new Date().getTime()/1000.0) + 604800});
         const thisState = this;
         uploadData({
@@ -201,32 +205,31 @@ class S3Upload extends Component {
                     }
                 },
             },
-        }).result.then(
-            (result) => {
-                info = {
-                    key: result.key,
-                    keyName: keyName, 
-                    confidence: confidence,
-                    pages: pages,
-                    file_type: mimeType
-                }
-                updateProcessingStatus({id: key, status: "Processing"});
-                return uploadData({
-                    key: `file_info/${keyName}.json`,
-                    data: JSON.stringify(info),
-                    options: { accessLevel: visibility, contentType: 'json' },
-                }).result;
-            },
-            (err) => {
-                updateProcessingStatus({id: key, status: "Error", errorMessage: "File processing error occurred: " + err.message});
-                return alert('Error uploading file: ', err.message);
+        }).result.then((result) => {
+            info = {
+                key: result.key,
+                keyName: keyName,
+                confidence: confidence,
+                pages: pages,
+                file_type: mimeType
             }
-        ).then(() => {
+            updateProcessingStatus({id: key, status: "Processing"});
+            return uploadData({
+                key: `file_info/${keyName}.json`,
+                data: JSON.stringify(info),
+                options: { accessLevel: visibility, contentType: 'json' },
+            }).result;
+        }).then(() => {
             this.setProcessingTimeout();
             this.setState({
                 displayFileOptions: false,
                 fileName: "",
             });
+        }).catch((err) => {
+            // Covers a failure of either upload (the file or its file_info JSON).
+            // Without this, a failed file_info upload left the UI "processing" forever.
+            updateProcessingStatus({id: key, status: "Error", errorMessage: err.message});
+            alert('Error uploading file: ' + err.message);
         });
     }
 
